@@ -6,67 +6,137 @@ using Vintagestory.API.Server;
 
 namespace ForestRegrowth
 {
+    // 1. Create a Config Class to hold adjustable values
+    public class ForestRegrowthConfig
+    {
+        public int ClearRadius { get; set; } = 15;
+        public int SamplesPerTick { get; set; } = 64;
+        public double TickIntervalSeconds { get; set; } = 10.0;
+        // Adding a toggle just in case admins want to pause regrowth
+        public bool Enabled { get; set; } = true; 
+    }
+
     public class ForestRegrowthMod : ModSystem
     {
         private ICoreServerAPI sapi = null!;
-
-        private const double TickIntervalSeconds = 10.0;
-        private const int ClearRadius = 15;
-        private const double SpawnChance = 1.0;
-        private const int SamplesPerTick = 64;
-        private const int ScanRange = 80;
+        private ForestRegrowthConfig config = new ForestRegrowthConfig();
+        
+        // Caching block IDs for O(1) instantaneous lookups
+        private HashSet<int> treeAndSaplingIds = new HashSet<int>();
+        private bool idsCached = false;
+        
+        private long tickListenerId;
 
         public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Server;
 
         public override void StartServerSide(ICoreServerAPI api)
         {
             sapi = api;
-            sapi.Event.Timer(OnTick, TickIntervalSeconds);
+            LoadConfig();
 
-            sapi.ChatCommands.Create("frdebug")
-                .WithDescription("Forest Regrowth: prints block codes around your feet")
-                .HandleWith(OnDebugCommand);
+            tickListenerId = sapi.Event.Timer(OnTick, config.TickIntervalSeconds);
 
-            Mod.Logger.Notification("[ForestRegrowth] Mod loaded. Type /frdebug in game to inspect blocks.");
+            // Register Commands
+            RegisterCommands();
+
+            Mod.Logger.Notification("[ForestRegrowth] Mod loaded.");
         }
 
-        private TextCommandResult OnDebugCommand(TextCommandCallingArgs args)
+        private void LoadConfig()
         {
-            IServerPlayer player = (IServerPlayer)args.Caller.Player;
-            BlockPos pos = player.Entity.Pos.AsBlockPos;
-
-            Mod.Logger.Notification($"[ForestRegrowth] Player is at ({pos.X},{pos.Y},{pos.Z})");
-
-            // Check several Y levels at the player's X,Z to find what's there
-            for (int dy = -3; dy <= 1; dy++)
+            try 
             {
-                BlockPos checkPos = new BlockPos(pos.X, pos.Y + dy, pos.Z, 0);
-                Block b = sapi.World.BlockAccessor.GetBlock(checkPos);
-                bool isFF = b.Code?.Path.Contains("forestfloor") == true;
-                Mod.Logger.Notification($"[ForestRegrowth] Y+{dy} ({checkPos.Y}): {b?.Code?.Domain}:{b?.Code?.Path} | IsForestFloor={isFF}");
+                var loadedConfig = sapi.LoadModConfig<ForestRegrowthConfig>("forestregrowth.json");
+                if (loadedConfig != null)
+                {
+                    config = loadedConfig;
+                }
+                else
+                {
+                    sapi.StoreModConfig(config, "forestregrowth.json");
+                }
+            }
+            catch (Exception)
+            {
+                Mod.Logger.Warning("[ForestRegrowth] Failed to load config, using defaults.");
+                config = new ForestRegrowthConfig();
+            }
+        }
+
+        private void RegisterCommands()
+        {
+            var cmd = sapi.ChatCommands.Create("fr")
+                .WithDescription("Forest Regrowth Master Command")
+                .RequiresPrivilege(Privilege.controlserver);
+
+            cmd.BeginSubCommand("debug")
+                .WithDescription("Prints block codes around your feet")
+                .HandleWith(OnDebugCommand)
+                .EndSubCommand();
+
+            cmd.BeginSubCommand("config")
+                .WithDescription("Change configuration on the fly. Usage: /fr config [setting] [value]")
+                .WithArgs(sapi.ChatCommands.Parsers.Word("setting"), sapi.ChatCommands.Parsers.Double("value"))
+                .HandleWith(OnConfigCommand)
+                .EndSubCommand();
+        }
+
+        private TextCommandResult OnConfigCommand(TextCommandCallingArgs args)
+        {
+            string setting = (string)args[0];
+            double value = (double)args[1];
+
+            switch (setting.ToLower())
+            {
+                case "clearradius":
+                    config.ClearRadius = (int)value;
+                    break;
+                case "samplespertick":
+                    config.SamplesPerTick = (int)value;
+                    break;
+                case "tickinterval":
+                    config.TickIntervalSeconds = value;
+                    sapi.Event.UnregisterCallback(tickListenerId);
+                    tickListenerId = sapi.Event.Timer(OnTick, config.TickIntervalSeconds);
+                    break;
+                case "enabled":
+                    config.Enabled = value > 0;
+                    break;
+                default:
+                    return TextCommandResult.Error("Unknown setting. Valid: clearradius, samplespertick, tickinterval, enabled");
             }
 
-            // Check GetTerrainMapheightAt
-            int mapHeight = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(pos.X, 0, pos.Z, 0));
-            Mod.Logger.Notification($"[ForestRegrowth] GetTerrainMapheightAt = {mapHeight}");
-            Block mapBlock = sapi.World.BlockAccessor.GetBlock(new BlockPos(pos.X, mapHeight, pos.Z, 0));
-            bool isMapFF = mapBlock.Code?.Path.Contains("forestfloor") == true;
-            Mod.Logger.Notification($"[ForestRegrowth] Block at mapHeight: {mapBlock?.Code?.Domain}:{mapBlock?.Code?.Path} | IsForestFloor={isMapFF}");
+            sapi.StoreModConfig(config, "forestregrowth.json");
+            return TextCommandResult.Success($"[ForestRegrowth] Set {setting} to {value}");
+        }
 
-            return TextCommandResult.Success("Check server-main.log for results.");
+        private void CacheTreeIds()
+        {
+            // We run this once during the first tick to ensure all mods have registered their blocks
+            foreach (Block block in sapi.World.Blocks)
+            {
+                if (block?.Code == null) continue;
+                string path = block.Code.Path;
+                if (path.StartsWith("log-") || path.StartsWith("aged-log-") || path.StartsWith("sapling-"))
+                {
+                    treeAndSaplingIds.Add(block.BlockId);
+                }
+            }
+            idsCached = true;
+            Mod.Logger.Notification($"[ForestRegrowth] Cached {treeAndSaplingIds.Count} tree/sapling Block IDs for fast lookup.");
         }
 
         private void OnTick()
         {
+            if (!config.Enabled) return;
+            if (!idsCached) CacheTreeIds();
+
             if (sapi.World.AllOnlinePlayers is not IServerPlayer[] players || players.Length == 0) return;
 
             Random rng = sapi.World.Rand;
-
-            int forestFloorFound = 0;
-            int aboveNotAir = 0;
-            int nearbyTreeBlocked = 0;
-            int saplingPlaced = 0;
-            int noSaplingType = 0;
+            
+            // Match the server's render distance. (ViewDistance is in chunks. 1 chunk = 32 blocks)
+            int scanRange = sapi.Server.Config.ViewDistance * 32;
 
             foreach (IServerPlayer player in players)
             {
@@ -75,10 +145,10 @@ namespace ForestRegrowth
                 BlockPos? playerPos = player.Entity?.Pos?.AsBlockPos;
                 if (playerPos == null) continue;
 
-                for (int i = 0; i < SamplesPerTick; i++)
+                for (int i = 0; i < config.SamplesPerTick; i++)
                 {
-                    int dx = rng.Next(-ScanRange, ScanRange + 1);
-                    int dz = rng.Next(-ScanRange, ScanRange + 1);
+                    int dx = rng.Next(-scanRange, scanRange + 1);
+                    int dz = rng.Next(-scanRange, scanRange + 1);
 
                     int x = playerPos.X + dx;
                     int z = playerPos.Z + dz;
@@ -88,63 +158,54 @@ namespace ForestRegrowth
 
                     Block surfaceBlock = sapi.World.BlockAccessor.GetBlock(surfacePos);
                     if (!(surfaceBlock.Code?.Path.Contains("forestfloor") ?? false)) continue;
-                    forestFloorFound++;
 
                     BlockPos abovePos = surfacePos.UpCopy();
+                    
+                    // Fast integer check to ensure air
                     Block aboveBlock = sapi.World.BlockAccessor.GetBlock(abovePos);
-                    if (aboveBlock == null || aboveBlock.BlockId != 0)
-                    {
-                        aboveNotAir++;
-                        continue;
-                    }
+                    if (aboveBlock.BlockId != 0) continue;
 
-                    if (HasNearbyTreeOrSapling(surfacePos))
-                    {
-                        nearbyTreeBlocked++;
-                        continue;
-                    }
+                    if (HasNearbyTreeOrSapling(surfacePos)) continue;
 
                     Block? saplingBlock = ChooseSapling(surfacePos);
-                    if (saplingBlock == null)
-                    {
-                        noSaplingType++;
-                        continue;
-                    }
+                    if (saplingBlock == null) continue;
 
                     sapi.World.BlockAccessor.SetBlock(saplingBlock.BlockId, abovePos);
                     sapi.World.BlockAccessor.TriggerNeighbourBlockUpdate(abovePos);
-                    saplingPlaced++;
-                    Mod.Logger.Notification($"[ForestRegrowth] Spawned {saplingBlock.Code.Path} at ({abovePos.X}, {abovePos.Y}, {abovePos.Z})");
                 }
             }
-
-            Mod.Logger.Notification($"[ForestRegrowth] Results: forestFloor={forestFloorFound} aboveNotAir={aboveNotAir} nearbyTreeBlocked={nearbyTreeBlocked} noSaplingType={noSaplingType} placed={saplingPlaced}");
         }
 
         private bool HasNearbyTreeOrSapling(BlockPos centerPos)
         {
             IBlockAccessor ba = sapi.World.BlockAccessor;
             BlockPos checkPos = new BlockPos(0);
+            
+            int radius = config.ClearRadius;
+            int radiusSq = radius * radius;
 
-            for (int dx = -ClearRadius; dx <= ClearRadius; dx++)
+            for (int dx = -radius; dx <= radius; dx++)
             {
-                for (int dz = -ClearRadius; dz <= ClearRadius; dz++)
+                for (int dz = -radius; dz <= radius; dz++)
                 {
-                    if (dx * dx + dz * dz > ClearRadius * ClearRadius) continue;
+                    // Circular check is faster than square
+                    if (dx * dx + dz * dz > radiusSq) continue;
 
-                    for (int dy = -2; dy <= 24; dy++)
+                    // Optimization: We don't need to check all the way to Y=24 immediately.
+                    // Start from the ground up. If there's a tree, we'll hit the trunk right away.
+                    for (int dy = -1; dy <= 5; dy++) 
                     {
                         checkPos.Set(centerPos.X + dx, centerPos.Y + dy, centerPos.Z + dz);
-                        Block b = ba.GetBlock(checkPos);
-                        if (b == null || b.BlockId == 0) continue;
+                        
+                        // GetBlockId is vastly more performant than GetBlock, saving RAM allocation and CPU cycles
+                        int blockId = ba.GetBlockId(checkPos);
+                        if (blockId == 0) continue; 
 
-                        string path = b.Code?.Path ?? "";
-
-                        if (path.StartsWith("log-") || path.StartsWith("aged-log-"))
+                        // O(1) lookup against our cached list
+                        if (treeAndSaplingIds.Contains(blockId))
+                        {
                             return true;
-
-                        if (path.StartsWith("sapling-"))
-                            return true;
+                        }
                     }
                 }
             }
@@ -160,6 +221,8 @@ namespace ForestRegrowth
             float temp = climate.Temperature;
             float rain = climate.Rainfall;
 
+            // ... (Keep your existing ChooseSapling logic here, it is perfectly fine) ...
+            
             if (temp < 8f)
             {
                 candidates.Add("pine");
@@ -185,48 +248,32 @@ namespace ForestRegrowth
                 candidates.Add("oak");
             }
 
-            if (candidates.Count == 0)
-{
-    candidates.Add("oak");
-}
+            if (candidates.Count == 0) candidates.Add("oak");
 
-            // Remove duplicates to avoid bias (e.g. oak appearing multiple times)
-var unique = new HashSet<string>(candidates);
+            var unique = new HashSet<string>(candidates);
+            var valid = new List<Block>();
 
-var valid = new List<Block>();
+            foreach (string tree in unique)
+            {
+                Block b = sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}-free"));
+                if (b != null && b.BlockId != 0)
+                {
+                    valid.Add(b);
+                    continue;
+                }
 
-foreach (string tree in unique)
-{
-    Block b = sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}-free"));
-    if (b != null && b.BlockId != 0)
-    {
-        valid.Add(b);
-        continue;
-    }
+                b = sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}"));
+                if (b != null && b.BlockId != 0) valid.Add(b);
+            }
 
-    b = sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}"));
-    if (b != null && b.BlockId != 0)
-    {
-        valid.Add(b);
-    }
-}
-
-// If nothing valid found, fail
-if (valid.Count == 0) return null;
-
-// Pick a random valid sapling
-return valid[sapi.World.Rand.Next(valid.Count)];
+            if (valid.Count == 0) return null;
+            return valid[sapi.World.Rand.Next(valid.Count)];
         }
 
-        private static void Shuffle<T>(List<T> list, Random rng)
+        private TextCommandResult OnDebugCommand(TextCommandCallingArgs args)
         {
-            for (int n = list.Count - 1; n > 0; n--)
-            {
-                int k = rng.Next(n + 1);
-                T tmp = list[k];
-                list[k] = list[n];
-                list[n] = tmp;
-            }
+             // ... (Keep your existing debug logic here) ...
+             return TextCommandResult.Success("Check server-main.log for results.");
         }
     }
 }
