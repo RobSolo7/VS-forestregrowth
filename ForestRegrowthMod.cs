@@ -7,14 +7,14 @@ using Vintagestory.API.Server;
 namespace ForestRegrowth
 {
     // 1. Create a Config Class to hold adjustable values
-    public class ForestRegrowthConfig
-    {
-        public int ClearRadius { get; set; } = 15;
-        public int SamplesPerTick { get; set; } = 64;
-        public double TickIntervalSeconds { get; set; } = 10.0;
-        // Adding a toggle just in case admins want to pause regrowth
-        public bool Enabled { get; set; } = true; 
-    }
+   public class ForestRegrowthConfig
+{
+    public int ClearRadius { get; set; } = 15;
+    public int SamplesPerTick { get; set; } = 64;
+    public double TickIntervalSeconds { get; set; } = 10.0;
+    public int ScanRange { get; set; } = 80; // Added this back in!
+    public bool Enabled { get; set; } = true; 
+}
 
     public class ForestRegrowthMod : ModSystem
     {
@@ -30,151 +30,99 @@ namespace ForestRegrowth
         public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Server;
 
         public override void StartServerSide(ICoreServerAPI api)
-        {
-            sapi = api;
-            LoadConfig();
+{
+    sapi = api;
+    LoadConfig();
 
-            tickListenerId = sapi.Event.Timer(OnTick, config.TickIntervalSeconds);
+    // Removed the tickListenerId assignment
+    sapi.Event.Timer(OnTick, config.TickIntervalSeconds);
 
-            // Register Commands
-            RegisterCommands();
+    // Register Commands
+    RegisterCommands();
 
-            Mod.Logger.Notification("[ForestRegrowth] Mod loaded.");
-        }
+    Mod.Logger.Notification("[ForestRegrowth] Mod loaded.");
+}
 
-        private void LoadConfig()
-        {
-            try 
-            {
-                var loadedConfig = sapi.LoadModConfig<ForestRegrowthConfig>("forestregrowth.json");
-                if (loadedConfig != null)
-                {
-                    config = loadedConfig;
-                }
-                else
-                {
-                    sapi.StoreModConfig(config, "forestregrowth.json");
-                }
-            }
-            catch (Exception)
-            {
-                Mod.Logger.Warning("[ForestRegrowth] Failed to load config, using defaults.");
-                config = new ForestRegrowthConfig();
-            }
-        }
+private TextCommandResult OnConfigCommand(TextCommandCallingArgs args)
+{
+    string setting = (string)args[0];
+    double value = (double)args[1];
 
-        private void RegisterCommands()
-        {
-            var cmd = sapi.ChatCommands.Create("fr")
-                .WithDescription("Forest Regrowth Master Command")
-                .RequiresPrivilege(Privilege.controlserver);
-
-            cmd.BeginSubCommand("debug")
-                .WithDescription("Prints block codes around your feet")
-                .HandleWith(OnDebugCommand)
-                .EndSubCommand();
-
-            cmd.BeginSubCommand("config")
-                .WithDescription("Change configuration on the fly. Usage: /fr config [setting] [value]")
-                .WithArgs(sapi.ChatCommands.Parsers.Word("setting"), sapi.ChatCommands.Parsers.Double("value"))
-                .HandleWith(OnConfigCommand)
-                .EndSubCommand();
-        }
-
-        private TextCommandResult OnConfigCommand(TextCommandCallingArgs args)
-        {
-            string setting = (string)args[0];
-            double value = (double)args[1];
-
-            switch (setting.ToLower())
-            {
-                case "clearradius":
-                    config.ClearRadius = (int)value;
-                    break;
-                case "samplespertick":
-                    config.SamplesPerTick = (int)value;
-                    break;
-                case "tickinterval":
-                    config.TickIntervalSeconds = value;
-                    sapi.Event.UnregisterCallback(tickListenerId);
-                    tickListenerId = sapi.Event.Timer(OnTick, config.TickIntervalSeconds);
-                    break;
-                case "enabled":
-                    config.Enabled = value > 0;
-                    break;
-                default:
-                    return TextCommandResult.Error("Unknown setting. Valid: clearradius, samplespertick, tickinterval, enabled");
-            }
-
+    switch (setting.ToLower())
+    {
+        case "clearradius":
+            config.ClearRadius = (int)value;
+            break;
+        case "samplespertick":
+            config.SamplesPerTick = (int)value;
+            break;
+        case "scanrange":
+            config.ScanRange = (int)value;
+            break;
+        case "tickinterval":
+            config.TickIntervalSeconds = value;
             sapi.StoreModConfig(config, "forestregrowth.json");
-            return TextCommandResult.Success($"[ForestRegrowth] Set {setting} to {value}");
-        }
+            // Inform the user a restart is needed for this specific setting
+            return TextCommandResult.Success($"[ForestRegrowth] Set tickinterval to {value}. Note: Server restart required to apply the new interval.");
+        case "enabled":
+            config.Enabled = value > 0;
+            break;
+        default:
+            return TextCommandResult.Error("Unknown setting. Valid: clearradius, samplespertick, scanrange, tickinterval, enabled");
+    }
 
-        private void CacheTreeIds()
+    sapi.StoreModConfig(config, "forestregrowth.json");
+    return TextCommandResult.Success($"[ForestRegrowth] Set {setting} to {value}");
+}
+
+private void OnTick()
+{
+    if (!config.Enabled) return;
+    if (!idsCached) CacheTreeIds();
+
+    if (sapi.World.AllOnlinePlayers is not IServerPlayer[] players || players.Length == 0) return;
+
+    Random rng = sapi.World.Rand;
+    
+    // Pull from our custom config instead of the server config
+    int scanRange = config.ScanRange;
+
+    foreach (IServerPlayer player in players)
+    {
+        if (player.ConnectionState != EnumClientState.Playing) continue;
+
+        BlockPos? playerPos = player.Entity?.Pos?.AsBlockPos;
+        if (playerPos == null) continue;
+
+        for (int i = 0; i < config.SamplesPerTick; i++)
         {
-            // We run this once during the first tick to ensure all mods have registered their blocks
-            foreach (Block block in sapi.World.Blocks)
-            {
-                if (block?.Code == null) continue;
-                string path = block.Code.Path;
-                if (path.StartsWith("log-") || path.StartsWith("aged-log-") || path.StartsWith("sapling-"))
-                {
-                    treeAndSaplingIds.Add(block.BlockId);
-                }
-            }
-            idsCached = true;
-            Mod.Logger.Notification($"[ForestRegrowth] Cached {treeAndSaplingIds.Count} tree/sapling Block IDs for fast lookup.");
-        }
+            int dx = rng.Next(-scanRange, scanRange + 1);
+            int dz = rng.Next(-scanRange, scanRange + 1);
 
-        private void OnTick()
-        {
-            if (!config.Enabled) return;
-            if (!idsCached) CacheTreeIds();
+            int x = playerPos.X + dx;
+            int z = playerPos.Z + dz;
 
-            if (sapi.World.AllOnlinePlayers is not IServerPlayer[] players || players.Length == 0) return;
+            int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(x, 0, z, 0));
+            BlockPos surfacePos = new BlockPos(x, y, z, 0);
 
-            Random rng = sapi.World.Rand;
+            Block surfaceBlock = sapi.World.BlockAccessor.GetBlock(surfacePos);
+            if (!(surfaceBlock.Code?.Path.Contains("forestfloor") ?? false)) continue;
+
+            BlockPos abovePos = surfacePos.UpCopy();
             
-            // Match the server's render distance. (ViewDistance is in chunks. 1 chunk = 32 blocks)
-            int scanRange = sapi.Server.Config.ViewDistance * 32;
+            Block aboveBlock = sapi.World.BlockAccessor.GetBlock(abovePos);
+            if (aboveBlock.BlockId != 0) continue;
 
-            foreach (IServerPlayer player in players)
-            {
-                if (player.ConnectionState != EnumClientState.Playing) continue;
+            if (HasNearbyTreeOrSapling(surfacePos)) continue;
 
-                BlockPos? playerPos = player.Entity?.Pos?.AsBlockPos;
-                if (playerPos == null) continue;
+            Block? saplingBlock = ChooseSapling(surfacePos);
+            if (saplingBlock == null) continue;
 
-                for (int i = 0; i < config.SamplesPerTick; i++)
-                {
-                    int dx = rng.Next(-scanRange, scanRange + 1);
-                    int dz = rng.Next(-scanRange, scanRange + 1);
-
-                    int x = playerPos.X + dx;
-                    int z = playerPos.Z + dz;
-
-                    int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(x, 0, z, 0));
-                    BlockPos surfacePos = new BlockPos(x, y, z, 0);
-
-                    Block surfaceBlock = sapi.World.BlockAccessor.GetBlock(surfacePos);
-                    if (!(surfaceBlock.Code?.Path.Contains("forestfloor") ?? false)) continue;
-
-                    BlockPos abovePos = surfacePos.UpCopy();
-                    
-                    // Fast integer check to ensure air
-                    Block aboveBlock = sapi.World.BlockAccessor.GetBlock(abovePos);
-                    if (aboveBlock.BlockId != 0) continue;
-
-                    if (HasNearbyTreeOrSapling(surfacePos)) continue;
-
-                    Block? saplingBlock = ChooseSapling(surfacePos);
-                    if (saplingBlock == null) continue;
-
-                    sapi.World.BlockAccessor.SetBlock(saplingBlock.BlockId, abovePos);
-                    sapi.World.BlockAccessor.TriggerNeighbourBlockUpdate(abovePos);
-                }
-            }
+            sapi.World.BlockAccessor.SetBlock(saplingBlock.BlockId, abovePos);
+            sapi.World.BlockAccessor.TriggerNeighbourBlockUpdate(abovePos);
         }
+    }
+}
 
         private bool HasNearbyTreeOrSapling(BlockPos centerPos)
         {
