@@ -18,24 +18,13 @@ namespace ForestRegrowth
     /// </summary>
     public class ForestRegrowthMod : ModSystem
     {
-        private ICoreServerAPI sapi;
+        // CS8618: initialised in StartServerSide before any other method runs
+        private ICoreServerAPI sapi = null!;
 
-        // How often (in real milliseconds) we run the per-player scan sweep.
-        // 60 seconds means each forest floor block near a player is checked once per minute on average.
-        private const int TickIntervalMs = 5_000;
-
-        // Radius (in blocks) to check for existing trees/saplings before spawning.
+        private const int TickIntervalMs = 60_000;
         private const int ClearRadius = 15;
-
-        // Chance (0.0 – 1.0) that an eligible forest floor block actually spawns a sapling per tick.
-        // With a 60 s tick this gives roughly one sapling per ~20 minutes per eligible block on average.
-        private const double SpawnChance = 1.0;
-
-        // How many forest floor blocks we sample around each loaded player per tick.
-        // Keeps performance reasonable on busy servers.
+        private const double SpawnChance = 0.05;
         private const int SamplesPerPlayerPerTick = 8;
-
-        // Horizontal range around a player we sample from.
         private const int ScanRange = 48;
 
         public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Server;
@@ -43,13 +32,13 @@ namespace ForestRegrowth
         public override void StartServerSide(ICoreServerAPI api)
         {
             sapi = api;
-            sapi.Event.Timer(OnTick, TickIntervalMs / 1000.0); // Timer takes seconds
+            sapi.Event.Timer(OnTick, TickIntervalMs / 1000.0);
         }
 
         private void OnTick()
         {
-            IServerPlayer[] players = sapi.World.AllOnlinePlayers as IServerPlayer[];
-            if (players == null || players.Length == 0) return;
+            // CS8600: use pattern matching instead of direct cast
+            if (sapi.World.AllOnlinePlayers is not IServerPlayer[] players || players.Length == 0) return;
 
             Random rng = sapi.World.Rand;
 
@@ -57,42 +46,38 @@ namespace ForestRegrowth
             {
                 if (player.ConnectionState != EnumClientState.Playing) continue;
 
-                BlockPos playerPos = player.Entity?.Pos?.AsBlockPos;
+                // CS8600: explicit nullable type
+                BlockPos? playerPos = player.Entity?.Pos?.AsBlockPos;
                 if (playerPos == null) continue;
 
                 for (int i = 0; i < SamplesPerPlayerPerTick; i++)
                 {
-                    // Pick a random offset within ScanRange
                     int dx = rng.Next(-ScanRange, ScanRange + 1);
                     int dz = rng.Next(-ScanRange, ScanRange + 1);
 
-                    // Find the surface at that (x,z)
                     int x = playerPos.X + dx;
                     int z = playerPos.Z + dz;
-                    int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(x, 0, z));
 
-                    BlockPos surfacePos = new BlockPos(x, y, z);
+                    // CS0618: use dimensionId overload to avoid obsolete constructor
+                    int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(x, 0, z, 0));
+
+                    BlockPos surfacePos = new BlockPos(x, y, z, 0);
                     Block surfaceBlock = sapi.World.BlockAccessor.GetBlock(surfacePos);
 
-                    // Only act on forest floor blocks
                     if (!IsForestFloor(surfaceBlock)) continue;
 
-                    // The block on top must be air
                     BlockPos abovePos = surfacePos.UpCopy();
                     Block aboveBlock = sapi.World.BlockAccessor.GetBlock(abovePos);
                     if (aboveBlock == null || aboveBlock.BlockId != 0) continue;
 
-                    // Probability check
                     if (rng.NextDouble() > SpawnChance) continue;
 
-                    // Check for nearby trees/saplings
                     if (HasNearbyTreeOrSapling(surfacePos)) continue;
 
-                    // Pick sapling based on climate
-                    Block saplingBlock = ChooseSapling(surfacePos);
+                    // CS8603: nullable return type
+                    Block? saplingBlock = ChooseSapling(surfacePos);
                     if (saplingBlock == null) continue;
 
-                    // Place the sapling on top of the forest floor
                     sapi.World.BlockAccessor.SetBlock(saplingBlock.BlockId, abovePos);
                     sapi.World.BlockAccessor.TriggerNeighbourBlockUpdate(abovePos);
                     Mod.Logger.Notification($"[ForestRegrowth] Spawned {saplingBlock.Code.Path} at ({abovePos.X}, {abovePos.Y}, {abovePos.Z})");
@@ -102,7 +87,6 @@ namespace ForestRegrowth
 
         private bool IsForestFloor(Block block)
         {
-            // Forest floor blocks have codes like "game:forestfloor-1", "game:forestfloor-2", etc.
             return block?.Code?.Domain == "game" &&
                    block.Code.Path.StartsWith("forestfloor");
         }
@@ -110,16 +94,16 @@ namespace ForestRegrowth
         private bool HasNearbyTreeOrSapling(BlockPos centerPos)
         {
             IBlockAccessor ba = sapi.World.BlockAccessor;
-            BlockPos checkPos = new BlockPos();
+
+            // CS0618: use dimensionId overload
+            BlockPos checkPos = new BlockPos(0);
 
             for (int dx = -ClearRadius; dx <= ClearRadius; dx++)
             {
                 for (int dz = -ClearRadius; dz <= ClearRadius; dz++)
                 {
-                    // Circular radius check
                     if (dx * dx + dz * dz > ClearRadius * ClearRadius) continue;
 
-                    // Check a vertical slice from surface-2 to surface+24
                     for (int dy = -2; dy <= 24; dy++)
                     {
                         checkPos.Set(centerPos.X + dx, centerPos.Y + dy, centerPos.Z + dz);
@@ -128,11 +112,9 @@ namespace ForestRegrowth
 
                         string path = b.Code?.Path ?? "";
 
-                        // Tree logs
                         if (path.StartsWith("log-") || path.StartsWith("aged-log-"))
                             return true;
 
-                        // Sapling blocks
                         if (path.StartsWith("sapling-"))
                             return true;
                     }
@@ -141,27 +123,16 @@ namespace ForestRegrowth
             return false;
         }
 
-        /// <summary>
-        /// Choose a sapling type using the climate at the given position,
-        /// mirroring how the game picks trees during worldgen.
-        /// Falls back to oak if nothing matches.
-        /// </summary>
-        private Block ChooseSapling(BlockPos pos)
+        private Block? ChooseSapling(BlockPos pos)
         {
-            ClimateCondition climate = sapi.World.BlockAccessor.GetClimateAt(pos, EnumGetClimateMode.WorldGenValues);
+            // CS8603: nullable return type
+            ClimateCondition? climate = sapi.World.BlockAccessor.GetClimateAt(pos, EnumGetClimateMode.WorldGenValues);
             if (climate == null) return null;
 
-            // Build a prioritized list of candidates matching the climate.
-            // Temperature in VS worldgen is roughly: <5 = very cold, 5-12 = cold, 12-20 = temperate, >20 = warm.
-            // Rainfall: 0.0–1.0 normalized.
-            // These ranges approximate vanilla worldgen tree selection.
-
             var candidates = new List<string>();
-
             float temp = climate.Temperature;
             float rain = climate.Rainfall;
 
-            // Boreal / cold
             if (temp < 8f)
             {
                 candidates.Add("pine");
@@ -170,7 +141,6 @@ namespace ForestRegrowth
                 if (temp > 2f) candidates.Add("birch");
             }
 
-            // Temperate
             if (temp >= 6f && temp < 18f)
             {
                 candidates.Add("oak");
@@ -180,7 +150,6 @@ namespace ForestRegrowth
                 if (temp > 10f) candidates.Add("walnut");
             }
 
-            // Warm / subtropical
             if (temp >= 16f)
             {
                 candidates.Add("acacia");
@@ -189,19 +158,14 @@ namespace ForestRegrowth
                 candidates.Add("oak");
             }
 
-            // Always available as a universal fallback
             candidates.Add("oak");
 
-            // Shuffle candidates and find the first one that exists in the game
             Shuffle(candidates, sapi.World.Rand);
             foreach (string tree in candidates)
             {
-                // Sapling codes are like "game:sapling-oak-free"
-                // "free" means the sapling can grow in open air (no soil block requirement variant)
                 Block b = sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}-free"));
                 if (b != null && b.BlockId != 0) return b;
 
-                // Some trees don't have a -free variant; try without suffix
                 b = sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}"));
                 if (b != null && b.BlockId != 0) return b;
             }
