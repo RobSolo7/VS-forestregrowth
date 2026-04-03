@@ -22,14 +22,14 @@ namespace ForestRegrowth
 
         // How often (in real milliseconds) we run the per-player scan sweep.
         // 60 seconds means each forest floor block near a player is checked once per minute on average.
-        private const int TickIntervalMs = 60_000;
+        private const int TickIntervalMs = 5_000;
 
         // Radius (in blocks) to check for existing trees/saplings before spawning.
         private const int ClearRadius = 15;
 
         // Chance (0.0 – 1.0) that an eligible forest floor block actually spawns a sapling per tick.
         // With a 60 s tick this gives roughly one sapling per ~20 minutes per eligible block on average.
-        private const double SpawnChance = 0.05;
+        private const double SpawnChance = 1.0;
 
         // How many forest floor blocks we sample around each loaded player per tick.
         // Keeps performance reasonable on busy servers.
