@@ -20,13 +20,13 @@ namespace ForestRegrowth
         private ICoreServerAPI sapi = null!;
 
         // How often (in real seconds) the sweep runs.
-        private const double TickIntervalSeconds = 60.0;
+        private const double TickIntervalSeconds = 5.0;
 
         // Radius (in blocks) to check for existing trees/saplings before spawning.
-        private const int ClearRadius = 15;
+        private const int ClearRadius = 5;
 
         // Chance (0.0 – 1.0) that an eligible forest floor block spawns a sapling per tick.
-        private const double SpawnChance = 0.05;
+        private const double SpawnChance = 1.00;
 
         // How many positions we sample across all loaded chunks per tick.
         private const int SamplesPerTick = 64;
