@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
-using Vintagestory.GameContent;
 
 namespace ForestRegrowth
 {
@@ -43,7 +42,7 @@ namespace ForestRegrowth
             {
                 BlockPos checkPos = new BlockPos(pos.X, pos.Y + dy, pos.Z, 0);
                 Block b = sapi.World.BlockAccessor.GetBlock(checkPos);
-                bool isFF = b.Code?.Path.Contains("forestfloor") == true;;
+                bool isFF = b.Code?.Path.Contains("forestfloor") == true;
                 Mod.Logger.Notification($"[ForestRegrowth] Y+{dy} ({checkPos.Y}): {b?.Code?.Domain}:{b?.Code?.Path} | IsForestFloor={isFF}");
             }
 
@@ -51,7 +50,8 @@ namespace ForestRegrowth
             int mapHeight = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(pos.X, 0, pos.Z, 0));
             Mod.Logger.Notification($"[ForestRegrowth] GetTerrainMapheightAt = {mapHeight}");
             Block mapBlock = sapi.World.BlockAccessor.GetBlock(new BlockPos(pos.X, mapHeight, pos.Z, 0));
-            Mod.Logger.Notification($"[ForestRegrowth] Block at mapHeight: {mapBlock?.Code?.Domain}:{mapBlock?.Code?.Path} | IsForestFloor={mapBlock is BlockForestFloor}");
+            Mod.Logger.Notification($"[ForestRegrowth] Block at mapHeight: {mapBlock?.Code?.Domain}:{mapBlock?.Code?.Path} | IsForestFloor={bool isMapFF = mapBlock.Code?.Path.Contains("forestfloor") == true;
+Mod.Logger.Notification($"[ForestRegrowth] Block at mapHeight: {mapBlock?.Code?.Domain}:{mapBlock?.Code?.Path} | IsForestFloor={isMapFF}");}");
 
             return TextCommandResult.Success("Check server-main.log for results.");
         }
@@ -87,7 +87,7 @@ namespace ForestRegrowth
                     BlockPos surfacePos = new BlockPos(x, y, z, 0);
 
                     Block surfaceBlock = sapi.World.BlockAccessor.GetBlock(surfacePos);
-                    if (surfaceBlock is not BlockForestFloor) continue;
+                    if (!(surfaceBlock.Code?.Path.Contains("forestfloor") ?? false)) continue;
                     forestFloorFound++;
 
                     BlockPos abovePos = surfacePos.UpCopy();
