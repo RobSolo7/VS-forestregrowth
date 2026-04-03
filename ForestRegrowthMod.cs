@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
+using Vintagestory.GameContent;
 
 namespace ForestRegrowth
 {
@@ -10,10 +11,11 @@ namespace ForestRegrowth
     {
         private ICoreServerAPI sapi = null!;
 
-        private const double TickIntervalSeconds = 10.0;  // fast for debugging
+        private const double TickIntervalSeconds = 10.0;
         private const int ClearRadius = 15;
-        private const double SpawnChance = 1.0;           // 100% for debugging
+        private const double SpawnChance = 1.0;
         private const int SamplesPerTick = 64;
+        private const int ScanRange = 80;
 
         public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Server;
 
@@ -21,27 +23,44 @@ namespace ForestRegrowth
         {
             sapi = api;
             sapi.Event.Timer(OnTick, TickIntervalSeconds);
-            Mod.Logger.Notification("[ForestRegrowth] Mod loaded and timer registered.");
+
+            sapi.ChatCommands.Create("frdebug")
+                .WithDescription("Forest Regrowth: prints block codes around your feet")
+                .HandleWith(OnDebugCommand);
+
+            Mod.Logger.Notification("[ForestRegrowth] Mod loaded. Type /frdebug in game to inspect blocks.");
+        }
+
+        private TextCommandResult OnDebugCommand(TextCommandCallingArgs args)
+        {
+            IServerPlayer player = (IServerPlayer)args.Caller.Player;
+            BlockPos pos = player.Entity.Pos.AsBlockPos;
+
+            Mod.Logger.Notification($"[ForestRegrowth] Player is at ({pos.X},{pos.Y},{pos.Z})");
+
+            // Check several Y levels at the player's X,Z to find what's there
+            for (int dy = -3; dy <= 1; dy++)
+            {
+                BlockPos checkPos = new BlockPos(pos.X, pos.Y + dy, pos.Z, 0);
+                Block b = sapi.World.BlockAccessor.GetBlock(checkPos);
+                bool isFF = b is IBlockForestFloor;
+                Mod.Logger.Notification($"[ForestRegrowth] Y+{dy} ({checkPos.Y}): {b?.Code?.Domain}:{b?.Code?.Path} | IsForestFloor={isFF}");
+            }
+
+            // Check GetTerrainMapheightAt
+            int mapHeight = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(pos.X, 0, pos.Z, 0));
+            Mod.Logger.Notification($"[ForestRegrowth] GetTerrainMapheightAt = {mapHeight}");
+            Block mapBlock = sapi.World.BlockAccessor.GetBlock(new BlockPos(pos.X, mapHeight, pos.Z, 0));
+            Mod.Logger.Notification($"[ForestRegrowth] Block at mapHeight: {mapBlock?.Code?.Domain}:{mapBlock?.Code?.Path} | IsForestFloor={mapBlock is IBlockForestFloor}");
+
+            return TextCommandResult.Success("Check server-main.log for results.");
         }
 
         private void OnTick()
         {
-            Mod.Logger.Notification("[ForestRegrowth] Tick fired.");
-
-            Dictionary<long, IServerChunk> loadedChunks = sapi.WorldManager.AllLoadedChunks;
-            if (loadedChunks == null || loadedChunks.Count == 0)
-            {
-                Mod.Logger.Notification("[ForestRegrowth] No loaded chunks found.");
-                return;
-            }
-
-            Mod.Logger.Notification($"[ForestRegrowth] {loadedChunks.Count} chunks loaded.");
+            if (sapi.World.AllOnlinePlayers is not IServerPlayer[] players || players.Length == 0) return;
 
             Random rng = sapi.World.Rand;
-            int chunkSize = sapi.WorldManager.ChunkSize;
-
-            long[] chunkKeys = new long[loadedChunks.Count];
-            loadedChunks.Keys.CopyTo(chunkKeys, 0);
 
             int forestFloorFound = 0;
             int aboveNotAir = 0;
@@ -49,65 +68,57 @@ namespace ForestRegrowth
             int saplingPlaced = 0;
             int noSaplingType = 0;
 
-            for (int i = 0; i < SamplesPerTick; i++)
+            foreach (IServerPlayer player in players)
             {
-                long chunkIndex = chunkKeys[rng.Next(chunkKeys.Length)];
+                if (player.ConnectionState != EnumClientState.Playing) continue;
 
-                int mapChunkSizeY = sapi.WorldManager.MapSizeY / chunkSize;
-                int mapChunkSizeZ = sapi.WorldManager.MapSizeZ / chunkSize;
+                BlockPos? playerPos = player.Entity?.Pos?.AsBlockPos;
+                if (playerPos == null) continue;
 
-                int cy = (int)(chunkIndex % mapChunkSizeY);
-                int cz = (int)(chunkIndex / mapChunkSizeY % mapChunkSizeZ);
-                int cx = (int)(chunkIndex / mapChunkSizeY / mapChunkSizeZ);
-
-                int originX = cx * chunkSize;
-                int originZ = cz * chunkSize;
-
-                int x = originX + rng.Next(chunkSize);
-                int z = originZ + rng.Next(chunkSize);
-
-                int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(x, 0, z, 0));
-                BlockPos surfacePos = new BlockPos(x, y, z, 0);
-
-                Block surfaceBlock = sapi.World.BlockAccessor.GetBlock(surfacePos);
-                if (!IsForestFloor(surfaceBlock)) continue;
-
-                forestFloorFound++;
-
-                BlockPos abovePos = surfacePos.UpCopy();
-                Block aboveBlock = sapi.World.BlockAccessor.GetBlock(abovePos);
-                if (aboveBlock == null || aboveBlock.BlockId != 0)
+                for (int i = 0; i < SamplesPerTick; i++)
                 {
-                    aboveNotAir++;
-                    continue;
-                }
+                    int dx = rng.Next(-ScanRange, ScanRange + 1);
+                    int dz = rng.Next(-ScanRange, ScanRange + 1);
 
-                if (HasNearbyTreeOrSapling(surfacePos))
-                {
-                    nearbyTreeBlocked++;
-                    continue;
-                }
+                    int x = playerPos.X + dx;
+                    int z = playerPos.Z + dz;
 
-                Block? saplingBlock = ChooseSapling(surfacePos);
-                if (saplingBlock == null)
-                {
-                    noSaplingType++;
-                    continue;
-                }
+                    int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(x, 0, z, 0));
+                    BlockPos surfacePos = new BlockPos(x, y, z, 0);
 
-                sapi.World.BlockAccessor.SetBlock(saplingBlock.BlockId, abovePos);
-                sapi.World.BlockAccessor.TriggerNeighbourBlockUpdate(abovePos);
-                saplingPlaced++;
-                Mod.Logger.Notification($"[ForestRegrowth] Spawned {saplingBlock.Code.Path} at ({abovePos.X}, {abovePos.Y}, {abovePos.Z})");
+                    Block surfaceBlock = sapi.World.BlockAccessor.GetBlock(surfacePos);
+                    if (surfaceBlock is not IBlockForestFloor) continue;
+                    forestFloorFound++;
+
+                    BlockPos abovePos = surfacePos.UpCopy();
+                    Block aboveBlock = sapi.World.BlockAccessor.GetBlock(abovePos);
+                    if (aboveBlock == null || aboveBlock.BlockId != 0)
+                    {
+                        aboveNotAir++;
+                        continue;
+                    }
+
+                    if (HasNearbyTreeOrSapling(surfacePos))
+                    {
+                        nearbyTreeBlocked++;
+                        continue;
+                    }
+
+                    Block? saplingBlock = ChooseSapling(surfacePos);
+                    if (saplingBlock == null)
+                    {
+                        noSaplingType++;
+                        continue;
+                    }
+
+                    sapi.World.BlockAccessor.SetBlock(saplingBlock.BlockId, abovePos);
+                    sapi.World.BlockAccessor.TriggerNeighbourBlockUpdate(abovePos);
+                    saplingPlaced++;
+                    Mod.Logger.Notification($"[ForestRegrowth] Spawned {saplingBlock.Code.Path} at ({abovePos.X}, {abovePos.Y}, {abovePos.Z})");
+                }
             }
 
             Mod.Logger.Notification($"[ForestRegrowth] Results: forestFloor={forestFloorFound} aboveNotAir={aboveNotAir} nearbyTreeBlocked={nearbyTreeBlocked} noSaplingType={noSaplingType} placed={saplingPlaced}");
-        }
-
-        private bool IsForestFloor(Block block)
-        {
-            return block?.Code?.Domain == "game" &&
-                   block.Code.Path.StartsWith("forestfloor");
         }
 
         private bool HasNearbyTreeOrSapling(BlockPos centerPos)
