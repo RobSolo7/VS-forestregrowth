@@ -185,19 +185,37 @@ namespace ForestRegrowth
                 candidates.Add("oak");
             }
 
-            candidates.Add("oak");
+            if (candidates.Count == 0)
+{
+    candidates.Add("oak");
+}
 
-            Shuffle(candidates, sapi.World.Rand);
-            foreach (string tree in candidates)
-            {
-                Block b = sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}-free"));
-                if (b != null && b.BlockId != 0) return b;
+            // Remove duplicates to avoid bias (e.g. oak appearing multiple times)
+var unique = new HashSet<string>(candidates);
 
-                b = sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}"));
-                if (b != null && b.BlockId != 0) return b;
-            }
+var valid = new List<Block>();
 
-            return null;
+foreach (string tree in unique)
+{
+    Block b = sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}-free"));
+    if (b != null && b.BlockId != 0)
+    {
+        valid.Add(b);
+        continue;
+    }
+
+    b = sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}"));
+    if (b != null && b.BlockId != 0)
+    {
+        valid.Add(b);
+    }
+}
+
+// If nothing valid found, fail
+if (valid.Count == 0) return null;
+
+// Pick a random valid sapling
+return valid[sapi.World.Rand.Next(valid.Count)];
         }
 
         private static void Shuffle<T>(List<T> list, Random rng)
