@@ -6,29 +6,13 @@ using Vintagestory.API.Server;
 
 namespace ForestRegrowth
 {
-    /// <summary>
-    /// Forest Regrowth Mod
-    ///
-    /// Each tick, samples random positions across all currently loaded chunks.
-    /// If a forest floor block is found with no trees or saplings within 15 blocks,
-    /// a climate-appropriate sapling is spawned on top of it.
-    ///
-    /// To permanently prevent regrowth, dig up the forest floor blocks.
-    /// </summary>
     public class ForestRegrowthMod : ModSystem
     {
         private ICoreServerAPI sapi = null!;
 
-        // How often (in real seconds) the sweep runs.
-        private const double TickIntervalSeconds = 5.0;
-
-        // Radius (in blocks) to check for existing trees/saplings before spawning.
-        private const int ClearRadius = 5;
-
-        // Chance (0.0 – 1.0) that an eligible forest floor block spawns a sapling per tick.
-        private const double SpawnChance = 1.00;
-
-        // How many positions we sample across all loaded chunks per tick.
+        private const double TickIntervalSeconds = 10.0;  // fast for debugging
+        private const int ClearRadius = 15;
+        private const double SpawnChance = 1.0;           // 100% for debugging
         private const int SamplesPerTick = 64;
 
         public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Server;
@@ -37,31 +21,40 @@ namespace ForestRegrowth
         {
             sapi = api;
             sapi.Event.Timer(OnTick, TickIntervalSeconds);
+            Mod.Logger.Notification("[ForestRegrowth] Mod loaded and timer registered.");
         }
 
         private void OnTick()
         {
+            Mod.Logger.Notification("[ForestRegrowth] Tick fired.");
+
             Dictionary<long, IServerChunk> loadedChunks = sapi.WorldManager.AllLoadedChunks;
-            if (loadedChunks == null || loadedChunks.Count == 0) return;
+            if (loadedChunks == null || loadedChunks.Count == 0)
+            {
+                Mod.Logger.Notification("[ForestRegrowth] No loaded chunks found.");
+                return;
+            }
+
+            Mod.Logger.Notification($"[ForestRegrowth] {loadedChunks.Count} chunks loaded.");
 
             Random rng = sapi.World.Rand;
             int chunkSize = sapi.WorldManager.ChunkSize;
 
-            // Copy keys so we can index into them randomly
             long[] chunkKeys = new long[loadedChunks.Count];
             loadedChunks.Keys.CopyTo(chunkKeys, 0);
 
+            int forestFloorFound = 0;
+            int aboveNotAir = 0;
+            int nearbyTreeBlocked = 0;
+            int saplingPlaced = 0;
+            int noSaplingType = 0;
+
             for (int i = 0; i < SamplesPerTick; i++)
             {
-                // Pick a random loaded chunk by its index key
                 long chunkIndex = chunkKeys[rng.Next(chunkKeys.Length)];
 
-                // Decode chunk coords from the packed index
-                // VS packs chunk coords as: index = (cx * mapSizeZ/chunkSize + cz) * mapSizeY/chunkSize + cy
-                // The easier approach is to use the MapSizeX/Z to unpack
-                int mapChunkSizeX = sapi.WorldManager.MapSizeX / chunkSize;
-                int mapChunkSizeZ = sapi.WorldManager.MapSizeZ / chunkSize;
                 int mapChunkSizeY = sapi.WorldManager.MapSizeY / chunkSize;
+                int mapChunkSizeZ = sapi.WorldManager.MapSizeZ / chunkSize;
 
                 int cy = (int)(chunkIndex % mapChunkSizeY);
                 int cz = (int)(chunkIndex / mapChunkSizeY % mapChunkSizeZ);
@@ -70,37 +63,45 @@ namespace ForestRegrowth
                 int originX = cx * chunkSize;
                 int originZ = cz * chunkSize;
 
-                // Pick a random (x, z) within this chunk
                 int x = originX + rng.Next(chunkSize);
                 int z = originZ + rng.Next(chunkSize);
 
-                // Find the surface block at this (x, z)
                 int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(x, 0, z, 0));
                 BlockPos surfacePos = new BlockPos(x, y, z, 0);
 
                 Block surfaceBlock = sapi.World.BlockAccessor.GetBlock(surfacePos);
                 if (!IsForestFloor(surfaceBlock)) continue;
 
-                // The block above must be air
+                forestFloorFound++;
+
                 BlockPos abovePos = surfacePos.UpCopy();
                 Block aboveBlock = sapi.World.BlockAccessor.GetBlock(abovePos);
-                if (aboveBlock == null || aboveBlock.BlockId != 0) continue;
+                if (aboveBlock == null || aboveBlock.BlockId != 0)
+                {
+                    aboveNotAir++;
+                    continue;
+                }
 
-                // Probability check
-                if (rng.NextDouble() > SpawnChance) continue;
+                if (HasNearbyTreeOrSapling(surfacePos))
+                {
+                    nearbyTreeBlocked++;
+                    continue;
+                }
 
-                // Check for nearby trees/saplings
-                if (HasNearbyTreeOrSapling(surfacePos)) continue;
-
-                // Pick a climate-appropriate sapling
                 Block? saplingBlock = ChooseSapling(surfacePos);
-                if (saplingBlock == null) continue;
+                if (saplingBlock == null)
+                {
+                    noSaplingType++;
+                    continue;
+                }
 
-                // Place it
                 sapi.World.BlockAccessor.SetBlock(saplingBlock.BlockId, abovePos);
                 sapi.World.BlockAccessor.TriggerNeighbourBlockUpdate(abovePos);
+                saplingPlaced++;
                 Mod.Logger.Notification($"[ForestRegrowth] Spawned {saplingBlock.Code.Path} at ({abovePos.X}, {abovePos.Y}, {abovePos.Z})");
             }
+
+            Mod.Logger.Notification($"[ForestRegrowth] Results: forestFloor={forestFloorFound} aboveNotAir={aboveNotAir} nearbyTreeBlocked={nearbyTreeBlocked} noSaplingType={noSaplingType} placed={saplingPlaced}");
         }
 
         private bool IsForestFloor(Block block)
