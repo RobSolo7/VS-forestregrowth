@@ -8,80 +8,89 @@ namespace ForestRegrowth
 {
     /// <summary>
     /// Forest Regrowth Mod
-    /// 
-    /// Forest floor blocks periodically attempt to spawn a sapling on top of themselves
-    /// if there are no trees (logs) or saplings within a 15-block horizontal radius.
-    /// The sapling type is chosen based on local climate data — the same data the game
-    /// uses during world generation.
     ///
-    /// To permanently stop regrowth in an area, dig up the forest floor blocks.
+    /// Each tick, samples random positions across all currently loaded chunks.
+    /// If a forest floor block is found with no trees or saplings within 15 blocks,
+    /// a climate-appropriate sapling is spawned on top of it.
+    ///
+    /// To permanently prevent regrowth, dig up the forest floor blocks.
     /// </summary>
     public class ForestRegrowthMod : ModSystem
     {
-        // CS8618: initialised in StartServerSide before any other method runs
         private ICoreServerAPI sapi = null!;
 
-        private const int TickIntervalMs = 60_000;
+        // How often (in real seconds) the sweep runs.
+        private const double TickIntervalSeconds = 60.0;
+
+        // Radius (in blocks) to check for existing trees/saplings before spawning.
         private const int ClearRadius = 15;
+
+        // Chance (0.0 – 1.0) that an eligible forest floor block spawns a sapling per tick.
         private const double SpawnChance = 0.05;
-        private const int SamplesPerPlayerPerTick = 8;
-        private const int ScanRange = 48;
+
+        // How many positions we sample across all loaded chunks per tick.
+        // Raise this if forests feel too slow to recover; lower it to reduce server load.
+        private const int SamplesPerTick = 64;
 
         public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Server;
 
         public override void StartServerSide(ICoreServerAPI api)
         {
             sapi = api;
-            sapi.Event.Timer(OnTick, TickIntervalMs / 1000.0);
+            sapi.Event.Timer(OnTick, TickIntervalSeconds);
         }
 
         private void OnTick()
         {
-            // CS8600: use pattern matching instead of direct cast
-            if (sapi.World.AllOnlinePlayers is not IServerPlayer[] players || players.Length == 0) return;
+            IWorldChunk[] loadedChunks = sapi.WorldManager.AllLoadedChunks;
+            if (loadedChunks == null || loadedChunks.Length == 0) return;
 
             Random rng = sapi.World.Rand;
+            int chunkSize = sapi.WorldManager.ChunkSize; // typically 32
 
-            foreach (IServerPlayer player in players)
+            for (int i = 0; i < SamplesPerTick; i++)
             {
-                if (player.ConnectionState != EnumClientState.Playing) continue;
+                // Pick a random loaded chunk
+                IWorldChunk chunk = loadedChunks[rng.Next(loadedChunks.Length)];
+                if (chunk == null) continue;
 
-                // CS8600: explicit nullable type
-                BlockPos? playerPos = player.Entity?.Pos?.AsBlockPos;
-                if (playerPos == null) continue;
+                // Get the chunk's block-coordinate origin
+                long index = sapi.WorldManager.ChunkIndex(chunk);
+                sapi.WorldManager.ChunkCoordFromIndex(index, out int cx, out int cy, out int cz);
 
-                for (int i = 0; i < SamplesPerPlayerPerTick; i++)
-                {
-                    int dx = rng.Next(-ScanRange, ScanRange + 1);
-                    int dz = rng.Next(-ScanRange, ScanRange + 1);
+                int originX = cx * chunkSize;
+                int originZ = cz * chunkSize;
 
-                    int x = playerPos.X + dx;
-                    int z = playerPos.Z + dz;
+                // Pick a random (x, z) within this chunk
+                int x = originX + rng.Next(chunkSize);
+                int z = originZ + rng.Next(chunkSize);
 
-                    // CS0618: use dimensionId overload to avoid obsolete constructor
-                    int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(x, 0, z, 0));
+                // Find the surface block at this (x, z)
+                int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(x, 0, z, 0));
+                BlockPos surfacePos = new BlockPos(x, y, z, 0);
 
-                    BlockPos surfacePos = new BlockPos(x, y, z, 0);
-                    Block surfaceBlock = sapi.World.BlockAccessor.GetBlock(surfacePos);
+                Block surfaceBlock = sapi.World.BlockAccessor.GetBlock(surfacePos);
+                if (!IsForestFloor(surfaceBlock)) continue;
 
-                    if (!IsForestFloor(surfaceBlock)) continue;
+                // The block above must be air
+                BlockPos abovePos = surfacePos.UpCopy();
+                Block aboveBlock = sapi.World.BlockAccessor.GetBlock(abovePos);
+                if (aboveBlock == null || aboveBlock.BlockId != 0) continue;
 
-                    BlockPos abovePos = surfacePos.UpCopy();
-                    Block aboveBlock = sapi.World.BlockAccessor.GetBlock(abovePos);
-                    if (aboveBlock == null || aboveBlock.BlockId != 0) continue;
+                // Probability check
+                if (rng.NextDouble() > SpawnChance) continue;
 
-                    if (rng.NextDouble() > SpawnChance) continue;
+                // Check for nearby trees/saplings
+                if (HasNearbyTreeOrSapling(surfacePos)) continue;
 
-                    if (HasNearbyTreeOrSapling(surfacePos)) continue;
+                // Pick a climate-appropriate sapling
+                Block? saplingBlock = ChooseSapling(surfacePos);
+                if (saplingBlock == null) continue;
 
-                    // CS8603: nullable return type
-                    Block? saplingBlock = ChooseSapling(surfacePos);
-                    if (saplingBlock == null) continue;
-
-                    sapi.World.BlockAccessor.SetBlock(saplingBlock.BlockId, abovePos);
-                    sapi.World.BlockAccessor.TriggerNeighbourBlockUpdate(abovePos);
-                    Mod.Logger.Notification($"[ForestRegrowth] Spawned {saplingBlock.Code.Path} at ({abovePos.X}, {abovePos.Y}, {abovePos.Z})");
-                }
+                // Place it
+                sapi.World.BlockAccessor.SetBlock(saplingBlock.BlockId, abovePos);
+                sapi.World.BlockAccessor.TriggerNeighbourBlockUpdate(abovePos);
+                Mod.Logger.Notification($"[ForestRegrowth] Spawned {saplingBlock.Code.Path} at ({abovePos.X}, {abovePos.Y}, {abovePos.Z})");
             }
         }
 
@@ -94,8 +103,6 @@ namespace ForestRegrowth
         private bool HasNearbyTreeOrSapling(BlockPos centerPos)
         {
             IBlockAccessor ba = sapi.World.BlockAccessor;
-
-            // CS0618: use dimensionId overload
             BlockPos checkPos = new BlockPos(0);
 
             for (int dx = -ClearRadius; dx <= ClearRadius; dx++)
@@ -125,7 +132,6 @@ namespace ForestRegrowth
 
         private Block? ChooseSapling(BlockPos pos)
         {
-            // CS8603: nullable return type
             ClimateCondition? climate = sapi.World.BlockAccessor.GetClimateAt(pos, EnumGetClimateMode.WorldGenValues);
             if (climate == null) return null;
 
