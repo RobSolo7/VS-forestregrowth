@@ -1,0 +1,12 @@
+{
+  "type": "code",
+  "modid": "forestregrowth",
+  "name": "Forest Regrowth",
+  "description": "Forest floor blocks have a chance to spawn saplings if no trees or saplings are within 15 blocks. Sapling type is chosen based on local climate. Dig up the forest floor to permanently prevent regrowth.",
+  "authors": ["You"],
+  "version": "1.0.0",
+  "dependencies": {
+    "game": "1.21.0"
+  },
+  "side": "server"
+}

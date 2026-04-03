@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>forestregrowth</AssemblyName>
+    <RootNamespace>ForestRegrowth</RootNamespace>
+    <!-- Set VINTAGE_STORY env var to your game install directory -->
+    <GamePath Condition="'$(VINTAGE_STORY)' != ''">$(VINTAGE_STORY)</GamePath>
+    <GamePath Condition="'$(VINTAGE_STORY)' == ''">C:\Program Files\Vintagestory</GamePath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="VintagestoryAPI">
+      <HintPath>$(GamePath)\VintagestoryAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
