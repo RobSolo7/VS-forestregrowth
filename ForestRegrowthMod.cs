@@ -95,6 +95,7 @@ namespace ForestRegrowth
                     // Place the sapling on top of the forest floor
                     sapi.World.BlockAccessor.SetBlock(saplingBlock.BlockId, abovePos);
                     sapi.World.BlockAccessor.TriggerNeighbourBlockUpdate(abovePos);
+                    Mod.Logger.Notification($"[ForestRegrowth] Spawned {saplingBlock.Code.Path} at ({abovePos.X}, {abovePos.Y}, {abovePos.Z})");
                 }
             }
         }
