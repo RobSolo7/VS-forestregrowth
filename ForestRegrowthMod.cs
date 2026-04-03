@@ -6,7 +6,6 @@ using Vintagestory.API.Server;
 
 namespace ForestRegrowth
 {
-    // 1. Config Class
     public class ForestRegrowthConfig
     {
         public int ClearRadius { get; set; } = 15;
@@ -31,7 +30,6 @@ namespace ForestRegrowth
             sapi = api;
             LoadConfig();
 
-            // Timer for the regrowth logic
             sapi.Event.Timer(OnTick, config.TickIntervalSeconds);
 
             RegisterCommands();
@@ -145,8 +143,8 @@ namespace ForestRegrowth
                     int x = playerPos.X + dx;
                     int z = playerPos.Z + dz;
 
-                    // Fixed: Using standard x, z for map height
-                    int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(x, z);
+                    // FIX: Passed a BlockPos here instead of raw x, z
+                    int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(x, 0, z, playerPos.dimension));
                     BlockPos surfacePos = new BlockPos(x, y, z, playerPos.dimension);
 
                     Block surfaceBlock = sapi.World.BlockAccessor.GetBlock(surfacePos);
@@ -230,7 +228,6 @@ namespace ForestRegrowth
 
             for (int dy = -2; dy <= 1; dy++)
             {
-                // Fixed: Explicitly using pos.AddCopy to satisfy Dimension Awareness
                 BlockPos checkPos = pos.AddCopy(0, dy, 0);
                 Block b = sapi.World.BlockAccessor.GetBlock(checkPos);
                 
