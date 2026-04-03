@@ -6,6 +6,7 @@ using Vintagestory.API.Server;
 
 namespace ForestRegrowth
 {
+    // 1. Config Class
     public class ForestRegrowthConfig
     {
         public int ClearRadius { get; set; } = 15;
@@ -30,7 +31,7 @@ namespace ForestRegrowth
             sapi = api;
             LoadConfig();
 
-            // Set the timer based on config
+            // Timer for the regrowth logic
             sapi.Event.Timer(OnTick, config.TickIntervalSeconds);
 
             RegisterCommands();
@@ -54,25 +55,21 @@ namespace ForestRegrowth
 
         private void RegisterCommands()
         {
-            // Root command /forest
             var cmd = sapi.ChatCommands.Create("forest")
                 .WithDescription("Forest Regrowth main command")
                 .RequiresPrivilege(Privilege.controlserver);
 
-            // /forest debug (Toggle)
             cmd.BeginSubCommand("debug")
                 .WithDescription("Toggles live planting notifications in the server console")
                 .HandleWith(OnToggleDebug)
                 .EndSubCommand();
 
-            // /forest config
             cmd.BeginSubCommand("config")
                 .WithDescription("Change settings. Usage: /forest config [setting] [value]")
                 .WithArgs(sapi.ChatCommands.Parsers.Word("setting"), sapi.ChatCommands.Parsers.Double("value"))
                 .HandleWith(OnConfigCommand)
                 .EndSubCommand();
 
-            // /forest inspect (The old block-printing debug)
             cmd.BeginSubCommand("inspect")
                 .WithDescription("Prints technical block info at your current position to console")
                 .HandleWith(OnInspectCommand)
@@ -101,9 +98,9 @@ namespace ForestRegrowth
                 case "tickinterval":
                     config.TickIntervalSeconds = value;
                     sapi.StoreModConfig(config, "forestregrowth.json");
-                    return TextCommandResult.Success($"[ForestRegrowth] Tick interval set to {value}s. A server restart is required to change the timer frequency.");
+                    return TextCommandResult.Success($"[ForestRegrowth] Tick interval set to {value}s. A server restart is required to apply the new frequency.");
                 default:
-                    return TextCommandResult.Error("Valid settings: clearradius, samplespertick, scanrange, enabled, tickinterval");
+                    return TextCommandResult.Error("Valid: clearradius, samplespertick, scanrange, enabled, tickinterval");
             }
 
             sapi.StoreModConfig(config, "forestregrowth.json");
@@ -134,11 +131,11 @@ namespace ForestRegrowth
 
             Random rng = sapi.World.Rand;
 
-            foreach (IServerPlayer player in players)
+            foreach (IPlayer player in players)
             {
-                if (player.ConnectionState != EnumClientState.Playing || player.Entity == null) continue;
+                if (player is not IServerPlayer serverPlayer || serverPlayer.ConnectionState != EnumClientState.Playing || serverPlayer.Entity == null) continue;
 
-                BlockPos playerPos = player.Entity.Pos.AsBlockPos;
+                BlockPos playerPos = serverPlayer.Entity.Pos.AsBlockPos;
 
                 for (int i = 0; i < config.SamplesPerTick; i++)
                 {
@@ -148,8 +145,9 @@ namespace ForestRegrowth
                     int x = playerPos.X + dx;
                     int z = playerPos.Z + dz;
 
-                    int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(new BlockPos(x, 0, z, 0));
-                    BlockPos surfacePos = new BlockPos(x, y, z, 0);
+                    // Fixed: Using standard x, z for map height
+                    int y = sapi.World.BlockAccessor.GetTerrainMapheightAt(x, z);
+                    BlockPos surfacePos = new BlockPos(x, y, z, playerPos.dimension);
 
                     Block surfaceBlock = sapi.World.BlockAccessor.GetBlock(surfacePos);
                     if (!(surfaceBlock.Code?.Path.Contains("forestfloor") ?? false)) continue;
@@ -176,7 +174,7 @@ namespace ForestRegrowth
         private bool HasNearbyTreeOrSapling(BlockPos centerPos)
         {
             IBlockAccessor ba = sapi.World.BlockAccessor;
-            BlockPos checkPos = new BlockPos(0);
+            BlockPos checkPos = new BlockPos(0, 0, 0, centerPos.dimension);
             int radiusSq = config.ClearRadius * config.ClearRadius;
 
             for (int dx = -config.ClearRadius; dx <= config.ClearRadius; dx++)
@@ -225,15 +223,21 @@ namespace ForestRegrowth
 
         private TextCommandResult OnInspectCommand(TextCommandCallingArgs args)
         {
-            IServerPlayer player = (IServerPlayer)args.Caller.Player;
+            if (args.Caller.Player is not IServerPlayer player) return TextCommandResult.Error("Command must be run by a player.");
+            
             BlockPos pos = player.Entity.Pos.AsBlockPos;
-            sapi.Logger.Notification($"[ForestRegrowth] Inspecting ({pos.X},{pos.Y},{pos.Z})");
+            sapi.Logger.Notification($"[ForestRegrowth] Inspecting position ({pos.X},{pos.Y},{pos.Z})");
 
             for (int dy = -2; dy <= 1; dy++)
             {
-                Block b = sapi.World.BlockAccessor.GetBlock(pos.X, pos.Y + dy, pos.Z);
-                sapi.Logger.Notification($"  Y{dy}: {b.Code} (ForestFloor: {b.Code?.Path.Contains("forestfloor")})");
+                // Fixed: Explicitly using pos.AddCopy to satisfy Dimension Awareness
+                BlockPos checkPos = pos.AddCopy(0, dy, 0);
+                Block b = sapi.World.BlockAccessor.GetBlock(checkPos);
+                
+                bool isFF = b.Code?.Path.Contains("forestfloor") == true;
+                sapi.Logger.Notification($"  Relative Y{dy}: {b.Code} | IsForestFloor: {isFF}");
             }
+
             return TextCommandResult.Success("Inspection complete. Check server-main.log");
         }
     }
