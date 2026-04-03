@@ -29,7 +29,6 @@ namespace ForestRegrowth
         private const double SpawnChance = 0.05;
 
         // How many positions we sample across all loaded chunks per tick.
-        // Raise this if forests feel too slow to recover; lower it to reduce server load.
         private const int SamplesPerTick = 64;
 
         public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Server;
@@ -42,21 +41,31 @@ namespace ForestRegrowth
 
         private void OnTick()
         {
-            IWorldChunk[] loadedChunks = sapi.WorldManager.AllLoadedChunks;
-            if (loadedChunks == null || loadedChunks.Length == 0) return;
+            Dictionary<long, IServerChunk> loadedChunks = sapi.WorldManager.AllLoadedChunks;
+            if (loadedChunks == null || loadedChunks.Count == 0) return;
 
             Random rng = sapi.World.Rand;
-            int chunkSize = sapi.WorldManager.ChunkSize; // typically 32
+            int chunkSize = sapi.WorldManager.ChunkSize;
+
+            // Copy keys so we can index into them randomly
+            long[] chunkKeys = new long[loadedChunks.Count];
+            loadedChunks.Keys.CopyTo(chunkKeys, 0);
 
             for (int i = 0; i < SamplesPerTick; i++)
             {
-                // Pick a random loaded chunk
-                IWorldChunk chunk = loadedChunks[rng.Next(loadedChunks.Length)];
-                if (chunk == null) continue;
+                // Pick a random loaded chunk by its index key
+                long chunkIndex = chunkKeys[rng.Next(chunkKeys.Length)];
 
-                // Get the chunk's block-coordinate origin
-                long index = sapi.WorldManager.ChunkIndex(chunk);
-                sapi.WorldManager.ChunkCoordFromIndex(index, out int cx, out int cy, out int cz);
+                // Decode chunk coords from the packed index
+                // VS packs chunk coords as: index = (cx * mapSizeZ/chunkSize + cz) * mapSizeY/chunkSize + cy
+                // The easier approach is to use the MapSizeX/Z to unpack
+                int mapChunkSizeX = sapi.WorldManager.MapSizeX / chunkSize;
+                int mapChunkSizeZ = sapi.WorldManager.MapSizeZ / chunkSize;
+                int mapChunkSizeY = sapi.WorldManager.MapSizeY / chunkSize;
+
+                int cy = (int)(chunkIndex % mapChunkSizeY);
+                int cz = (int)(chunkIndex / mapChunkSizeY % mapChunkSizeZ);
+                int cx = (int)(chunkIndex / mapChunkSizeY / mapChunkSizeZ);
 
                 int originX = cx * chunkSize;
                 int originZ = cz * chunkSize;
