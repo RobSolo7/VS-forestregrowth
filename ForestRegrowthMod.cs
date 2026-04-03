@@ -80,7 +80,7 @@ namespace ForestRegrowth
                     // The block on top must be air
                     BlockPos abovePos = surfacePos.UpCopy();
                     Block aboveBlock = sapi.World.BlockAccessor.GetBlock(abovePos);
-                    if (!aboveBlock.IsAir) continue;
+                    if (aboveBlock == null || aboveBlock.BlockId != 0) continue;
 
                     // Probability check
                     if (rng.NextDouble() > SpawnChance) continue;
@@ -123,7 +123,7 @@ namespace ForestRegrowth
                     {
                         checkPos.Set(centerPos.X + dx, centerPos.Y + dy, centerPos.Z + dz);
                         Block b = ba.GetBlock(checkPos);
-                        if (b == null || b.IsAir) continue;
+                        if (b == null || b.BlockId == 0) continue;
 
                         string path = b.Code?.Path ?? "";
 
