@@ -6,7 +6,6 @@ A performance-optimized, server-side mod for **Vintage Story** that automaticall
 
 * **Climate-Aware Replanting**: Automatically selects tree species (Oak, Pine, Birch, Acacia, Kapok, etc.) based on local temperature and rainfall data.
 * **Intelligent Proximity Checks**: Prevents overcrowding by ensuring new saplings are only planted if no other trees or saplings are within a configurable radius.
-* **Dimension Awareness**: Built using the latest API standards to work correctly across different game dimensions (Overworld, etc.).
 * **Zero Performance Impact**: Uses an O(1) block ID caching system and randomized sampling to ensure it doesn't lag the server.
 * **Live In-Game Config**: Adjust scan ranges, speeds, and toggle features instantly without restarting the server.
 
