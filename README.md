@@ -1,4 +1,4 @@
-# Forest Regrowth Mod (v1.1.0)
+# Forest Regrowth Mod (v1.2.0)
 
 A performance-optimized, server-side mod for **Vintage Story** that automatically replants saplings on forest floors near players. It uses climate-aware logic to ensure the right trees grow in the right biomes, keeping your world lush and renewable.
 
@@ -37,7 +37,7 @@ Settings are saved in `ModConfig/forestregrowth.json`. You can edit the file man
 ## 🚀 Technical Requirements
 
 * **Platform**: Server-side only (Clients do not need to install this).
-* **Game Version**: Targeted for .NET 8.0 / Modern Vintage Story API.
+* **Game Version**: Vintage Story 1.22.7+ (.NET 10).
 * **Mod Compatibility**: Works with standard `game:sapling` assets. Compatible with most tree-adding mods that follow vanilla naming conventions.
 
 ---

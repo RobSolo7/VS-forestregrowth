@@ -212,7 +212,7 @@ namespace ForestRegrowth
 
             foreach (string tree in unique)
             {
-                Block b = sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}-free")) ?? sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}"));
+                Block? b = sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}-free")) ?? sapi.World.GetBlock(new AssetLocation("game", $"sapling-{tree}"));
                 if (b != null && b.BlockId != 0) valid.Add(b);
             }
 
